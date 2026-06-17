@@ -175,8 +175,8 @@ Dieses Tool dient ausschliesslich der Unterstützung der Flugvorbereitung. Für 
       <thead><tr>
         <th>Rolle</th><th>Land</th><th class="ap">Flugplatz</th><th>Höhe<br>[ft]</th><th>OAT<br>[°C]</th>
         <th>Start verf.<br>TORA [m]</th><th>Land verf.<br>LDA [m]</th><th>Oberfl.</th>
-        <th>Start benötigt<br>(über 50ft)</th><th>Start-Marge</th>
-        <th>Land benötigt<br>(über 50ft)</th><th>Land-Marge</th>
+        <th>Start benötigt<br>Roll / über 50ft</th><th>Start-Marge<br>(über 50ft)</th>
+        <th>Land benötigt<br>Roll / über 50ft</th><th>Land-Marge<br>(über 50ft)</th>
       </tr></thead>
       <tbody id="perfBody"></tbody>
     </table>
@@ -462,33 +462,28 @@ function perfLookup(tbl,weight,alt,temp){
   return [ interp1(wq,ws[i0],ws[i1],r0[0],r1[0]), interp1(wq,ws[i0],ws[i1],r0[1],r1[1]) ];
 }
 
-/* Berechnet benötigte Start-/Landestrecke in METERN (über 50ft) */
-function calcDist(acKey, kind, weight, pressAlt, oat, surface, windKt, useFactor){
+/* Liefert Rollstrecke (ground roll) UND Strecke über 50ft in METERN, je {gnd, tot} */
+function calcPerf(acKey, kind, weight, pressAlt, oat, surface, windKt){
   const P=PERF[acKey];
   const tbl = kind==="to"?P.to:P.ld;
   let [gnd,tot]=perfLookup(tbl,weight,pressAlt,oat); // in P.unit
-  // Gras / Belag Korrektur (auf ground roll bezogen)
+  let air = tot - gnd; // Luftstrecke (über/unter 50ft) – belag- und (näherungsweise) belastungsneutral
   if(P.unit==="ft"){
-    // Basis Asphalt; Gras-Zuschlag = %*groundroll auf total
-    if(surface==="G"){ tot += (kind==="to"?P.grassTO:P.grassLD)*gnd; }
-    // Wind: -10% per hwPct kt Gegenwind; +10% per 2kt Rückenwind
-    if(windKt>=0){ tot *= (1 - 0.10*(windKt/P.hwPct)); }
-    else { tot *= (1 + 0.10*((-windKt)/2)); }
-    tot = tot*FT; gnd=gnd*FT;
+    // Basis Asphalt; Gras-Zuschlag wirkt auf die Rollstrecke
+    if(surface==="G"){ gnd *= (1 + (kind==="to"?P.grassTO:P.grassLD)); }
+    // Wind proportional auf die ganze Strecke
+    let w = windKt>=0 ? (1 - 0.10*(windKt/P.hwPct)) : (1 + 0.10*((-windKt)/2));
+    gnd*=w; air*=w;
+    gnd*=FT; air*=FT;
   } else {
-    // Tecnam: Basis Gras; Asphalt -10% ground roll
-    if(surface==="A"){ gnd += (kind==="to"?P.pavedTO:P.pavedLD)*gnd; }
-    // Total folgt ground-roll-Änderung näherungsweise: wir korrigieren total um gleiche Differenz
-    // (AFM korrigiert ground roll; konservativ wenden wir es auf total an)
-    let totAdj = tot;
-    if(surface==="A"){ totAdj = tot + (kind==="to"?P.pavedTO:P.pavedLD)*gnd; }
-    tot = totAdj;
-    // Wind (m pro kt)
-    if(windKt>=0){ tot -= (kind==="to"?P.hwTO:P.hwLD)*windKt; }
-    else { tot += (kind==="to"?P.twTO:P.twLD)*(-windKt); }
-    // Tecnam-AFM-Faktor wird jetzt über die einstellbare Sicherheitsreserve abgebildet (siehe recalc).
+    // Tecnam: Basis Gras; Asphalt -10% Rollstrecke
+    if(surface==="A"){ gnd *= (1 + (kind==="to"?P.pavedTO:P.pavedLD)); }
+    // Wind absolut (m/kt) auf die Rollstrecke
+    let wd = windKt>=0 ? -(kind==="to"?P.hwTO:P.hwLD)*windKt : (kind==="to"?P.twTO:P.twLD)*(-windKt);
+    gnd += wd;
   }
-  return Math.max(0,Math.round(tot));
+  gnd=Math.max(0,gnd);
+  return { gnd:Math.round(gnd), tot:Math.round(Math.max(0,gnd+air)) };
 }
 
 /* ===================== UI / STATE ===================== */
@@ -583,7 +578,7 @@ function buildPerf(){
       <td data-label="Start TORA [m]"><input type="number" class="pl" style="width:64px"></td>
       <td data-label="Land LDA [m]"><input type="number" class="pll" style="width:64px"></td>
       <td data-label="Oberfläche"><select class="ps"><option value="A">Asph</option><option value="G">Gras</option></select></td>
-      <td class="cto" data-label="Start benötigt">–</td><td class="mto" data-label="Start-Marge">–</td><td class="cld" data-label="Land benötigt">–</td><td class="mld" data-label="Land-Marge">–</td>`;
+      <td class="cto" data-label="Start Roll / 50ft">–</td><td class="mto" data-label="Start-Marge">–</td><td class="cld" data-label="Land Roll / 50ft">–</td><td class="mld" data-label="Land-Marge">–</td>`;
     tb.appendChild(tr);
     const sel=tr.querySelector(".ap"), pc=tr.querySelector(".pc"), pe=tr.querySelector(".pe"), pl=tr.querySelector(".pl"), pll=tr.querySelector(".pll"), ps=tr.querySelector(".ps"), pt=tr.querySelector(".pt");
     const apply=()=>{ const a=adLookup(sel.value); if(a){ pe.value=a.e||''; if(a.t>0){pl.value=a.t;pl.placeholder='';}else{pl.value='';pl.placeholder='? AIP';} if(a.l>0){pll.value=a.l;pll.placeholder='';}else{pll.value='';pll.placeholder='? AIP';} ps.value=a.s||'G'; } recalc(); };
@@ -670,15 +665,17 @@ function recalc(){
     if(tmode==="man" && r.pt.value===""){ r.pt.placeholder=Math.round(isa); }
     else if(tmode==="isa"){ r.pt.value=""; r.pt.placeholder=Math.round(isa); }
     if(!isNaN(lenT)){
-      const toReq=Math.round(calcDist(cur.type,"to",tom,pa,oat,sfc,wind)*(1+resTO/100));
+      const p=calcPerf(cur.type,"to",tom,pa,oat,sfc,wind);
+      const toGnd=Math.round(p.gnd*(1+resTO/100)), toReq=Math.round(p.tot*(1+resTO/100));
       const toMar=lenT-toReq;
-      cTO.textContent=toReq+" m"; mTO.textContent=(toMar>=0?"+":"")+toMar+" m"; mTO.className="mto "+mcls(toMar,lenT);
+      cTO.innerHTML="Roll "+toGnd+" m<br>50ft "+toReq+" m"; mTO.textContent=(toMar>=0?"+":"")+toMar+" m"; mTO.className="mto "+mcls(toMar,lenT);
     } else { cTO.textContent=selSet?"TORA?":"–"; if(selSet)cTO.className="cto cell-warn"; mTO.textContent="–"; }
     const ldaUse = !isNaN(ldaV)?ldaV:lenT;
     if(!isNaN(ldaUse)){
-      const ldReq=Math.round(calcDist(cur.type,"ld",landMass,pa,oat,sfc,wind)*(1+resLD/100));
+      const p=calcPerf(cur.type,"ld",landMass,pa,oat,sfc,wind);
+      const ldGnd=Math.round(p.gnd*(1+resLD/100)), ldReq=Math.round(p.tot*(1+resLD/100));
       const ldMar=ldaUse-ldReq;
-      cLD.textContent=ldReq+" m"; mLD.textContent=(ldMar>=0?"+":"")+ldMar+" m"; mLD.className="mld "+mcls(ldMar,ldaUse);
+      cLD.innerHTML="Roll "+ldGnd+" m<br>50ft "+ldReq+" m"; mLD.textContent=(ldMar>=0?"+":"")+ldMar+" m"; mLD.className="mld "+mcls(ldMar,ldaUse);
     } else { cLD.textContent=selSet?"LDA?":"–"; if(selSet)cLD.className="cld cell-warn"; mLD.textContent="–"; }
   });
 }
