@@ -603,41 +603,62 @@ function buildPerf(){
 function parseTime(s){ if(!s) return 0; s=s.trim(); if(s.includes(":")){const[a,b]=s.split(":");return (+a)+(+b)/60;} return parseFloat(s)/60||0; }
 async function fetchJSON(url){
   const tryFetch = async(u)=>{
-    const ctrl=new AbortController(); const t=setTimeout(()=>ctrl.abort(), 8000);
+    const ctrl=new AbortController(); const t=setTimeout(()=>ctrl.abort(), 9000);
     try{ const r=await fetch(u,{cache:"no-store",signal:ctrl.signal}); clearTimeout(t); if(r.ok) return await r.json(); }catch(e){ clearTimeout(t); }
     return null;
   };
   let d=await tryFetch(url); if(d) return d;
   return await tryFetch("https://api.allorigins.win/raw?url="+encodeURIComponent(url));
 }
+async function getWx(a){
+  const c=COORD[a._id]; if(!c) return null;
+  const la=c[0], lo=c[1], dd=1.3;
+  // 1) Offizieller METAR (nächste Station)
+  const murl="https://aviationweather.gov/api/data/metar?format=json&bbox="+(la-dd).toFixed(2)+","+(lo-dd).toFixed(2)+","+(la+dd).toFixed(2)+","+(lo+dd).toFixed(2);
+  const arr=await fetchJSON(murl);
+  if(arr && arr.length){
+    let best=null,bd=1e9;
+    for(const m of arr){ if(m.altim==null||m.temp==null||m.lat==null) continue; const x=Math.pow(m.lat-la,2)+Math.pow(m.lon-lo,2); if(x<bd){bd=x;best=m;} }
+    if(best){
+      const stElevFt=(best.elev!=null)?best.elev/0.3048:(a.e||0);
+      const tField=best.temp - 1.98*((a.e||0)-stElevFt)/1000;
+      return {src:"METAR", st:best.icaoId, qnh:Math.round(best.altim), temp:Math.round(tField), dist:(best.icaoId!==a._id?Math.round(Math.sqrt(bd)*111):0)};
+    }
+  }
+  // 2) Fallback: Open-Meteo Modell direkt am Flugplatz
+  const ourl="https://api.open-meteo.com/v1/forecast?latitude="+la+"&longitude="+lo+"&current=temperature_2m,pressure_msl";
+  const om=await fetchJSON(ourl);
+  if(om && om.current && om.current.pressure_msl!=null && om.current.temperature_2m!=null){
+    return {src:"Modell", st:a._id, qnh:Math.round(om.current.pressure_msl), temp:Math.round(om.current.temperature_2m), dist:0};
+  }
+  return null;
+}
 async function loadMetar(){
-  const st=$("metarStatus"); st.style.color="var(--mut)"; st.textContent="METAR wird geladen …"; $("metarBtn").disabled=true;
-  const jobs = PERFROWS.map((r,i)=>{
-    const a=adLookup(r.sel.value);
-    if(!a || !COORD[a._id]) return Promise.resolve(null);
-    const c=COORD[a._id], la=c[0], lo=c[1], dd=1.3;
-    const url="https://aviationweather.gov/api/data/metar?format=json&bbox="+(la-dd).toFixed(2)+","+(lo-dd).toFixed(2)+","+(la+dd).toFixed(2)+","+(lo+dd).toFixed(2);
-    return fetchJSON(url).then(arr=>({r:r,i:i,a:a,la:la,lo:lo,arr:arr})).catch(()=>({r:r,i:i,a:a,la:la,lo:lo,arr:null}));
-  });
-  const results = await Promise.all(jobs);
+  const st=$("metarStatus"); st.style.color="var(--mut)"; st.textContent="Wetter wird geladen …"; $("metarBtn").disabled=true;
+  const sel = PERFROWS.map((r,i)=>({r:r,i:i,a:adLookup(r.sel.value)})).filter(o=>o.a && COORD[o.a._id]);
+  // 1) Leichte Batch-Abfrage: direkte METARs per ICAO (alle Plätze in EINER Anfrage)
+  let byId={};
+  const ids=[...new Set(sel.map(o=>o.a._id))].join(",");
+  if(ids){ const arr=await fetchJSON("https://aviationweather.gov/api/data/metar?format=json&ids="+encodeURIComponent(ids)); if(Array.isArray(arr)) arr.forEach(m=>{ if(m.icaoId&&m.altim!=null&&m.temp!=null) byId[m.icaoId]=m; }); }
+  // 2) Pro Zeile: direkter METAR (Station=Platz) -> sonst nächste Station/Modell (getWx)
+  const results = await Promise.all(sel.map(async o=>{
+    const a=o.a, m=byId[a._id];
+    if(m){ return {r:o.r,i:o.i,a:a,w:{src:"METAR",st:a._id,qnh:Math.round(m.altim),temp:Math.round(m.temp),dist:0}}; }
+    let w=null; try{ w=await getWx(a); }catch(e){}
+    return {r:o.r,i:o.i,a:a,w:w};
+  }));
   let lines=[], firstQnh=null, any=false;
   const now=new Date(); const hhmm=String(now.getHours()).padStart(2,"0")+":"+String(now.getMinutes()).padStart(2,"0");
   for(const res of results){
-    if(!res) continue;
-    const r=res.r, i=res.i, a=res.a, la=res.la, lo=res.lo, arr=res.arr;
-    if(!arr || !arr.length){ lines.push(ROLES[i]+" ("+a._id+"): kein METAR erreichbar"); continue; }
-    let best=null,bd=1e9;
-    for(const m of arr){ if(m.altim==null||m.temp==null||m.lat==null) continue; const dd2=Math.pow(m.lat-la,2)+Math.pow(m.lon-lo,2); if(dd2<bd){bd=dd2;best=m;} }
-    if(!best){ lines.push(ROLES[i]+" ("+a._id+"): kein METAR"); continue; }
-    const qnh=Math.round(best.altim); const stElev=(best.elev!=null)?best.elev/0.3048:(a.e||0);
-    const tField=best.temp - 1.98*((a.e||0)-stElev)/1000; const dist=Math.round(Math.sqrt(bd)*111);
-    r.tr.dataset.qnh=qnh; r.pt.value=Math.round(tField); r.tr.dataset.metar=best.icaoId+"|"+(best.icaoId!==a._id?dist:0)+"|"+hhmm;
-    if(firstQnh==null) firstQnh=qnh; any=true;
-    lines.push(ROLES[i]+": <b>"+best.icaoId+"</b> "+qnh+" hPa, "+best.temp+"°C → "+Math.round(tField)+"°C @ "+a.e+" ft"+(best.icaoId!==a._id?" (~"+dist+" km)":""));
+    const r=res.r,i=res.i,a=res.a,w=res.w;
+    if(!w){ lines.push(ROLES[i]+" ("+a._id+"): kein Wetter erreichbar"); continue; }
+    r.tr.dataset.qnh=w.qnh; r.pt.value=w.temp; r.tr.dataset.metar=w.src+"|"+w.st+"|"+w.dist+"|"+hhmm;
+    if(firstQnh==null) firstQnh=w.qnh; any=true;
+    lines.push(ROLES[i]+": <b>"+w.st+"</b> "+(w.src==="METAR"?"":"(Modell) ")+w.qnh+" hPa, "+w.temp+"°C @ "+a.e+" ft"+(w.dist>0?" (~"+w.dist+" km)":""));
   }
   if(any){ $("tmode").value="man"; if(firstQnh!=null) $("qnh").value=firstQnh; }
   st.style.color = any? "var(--mut)":"var(--bad)";
-  st.innerHTML = lines.length? lines.join("<br>") : "METAR nicht erreichbar – QNH/Temp bitte manuell.";
+  st.innerHTML = lines.length? lines.join("<br>") : "Kein Wetter erreichbar – QNH/Temp bitte manuell.";
   $("metarBtn").disabled=false;
   recalc();
 }
@@ -717,7 +738,7 @@ function recalc(){
     const isaPA = 15 - 1.98*(pa/1000); const da = Math.round(pa + 120*(oat - isaPA));
     const cDA=r.tr.querySelector(".da"); if(cDA) cDA.textContent = da + " ft";
     const cM=r.tr.querySelector(".msrc");
-    if(cM){ if(r.tr.dataset.metar){ const mp=r.tr.dataset.metar.split("|"); cM.innerHTML='<b style="color:var(--ok)">'+mp[0]+'</b>'+(+mp[1]>0?' <span class="muted">~'+mp[1]+'km</span>':'')+'<br><span class="muted">online '+mp[2]+'</span>'; } else { cM.innerHTML='<span class="muted">manuell</span>'; } }
+    if(cM){ if(r.tr.dataset.metar){ const mp=r.tr.dataset.metar.split("|"); const lab=(mp[0]==="METAR")?("online "+mp[3]):("Modell "+mp[3]); cM.innerHTML='<b style="color:var(--ok)">'+mp[1]+'</b>'+(+mp[2]>0?' <span class="muted">~'+mp[2]+'km</span>':'')+'<br><span class="muted">'+lab+'</span>'; } else { cM.innerHTML='<span class="muted">manuell</span>'; } }
     if(!isNaN(lenT)){
       const p=calcPerf(cur.type,"to",tom,pa,oat,sfc,wind);
       const toGnd=Math.round(p.gnd*(1+resTO/100)), toReq=Math.round(p.tot*(1+resTO/100));
