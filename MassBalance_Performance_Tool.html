@@ -629,7 +629,7 @@ async function loadMetar(){
     let best=null,bd=1e9;
     for(const m of arr){ if(m.altim==null||m.temp==null||m.lat==null) continue; const dd2=Math.pow(m.lat-la,2)+Math.pow(m.lon-lo,2); if(dd2<bd){bd=dd2;best=m;} }
     if(!best){ lines.push(ROLES[i]+" ("+a._id+"): kein METAR"); continue; }
-    const qnh=Math.round(best.altim); const stElev=(best.elev!=null)?best.elev:(a.e||0);
+    const qnh=Math.round(best.altim); const stElev=(best.elev!=null)?best.elev/0.3048:(a.e||0);
     const tField=best.temp - 1.98*((a.e||0)-stElev)/1000; const dist=Math.round(Math.sqrt(bd)*111);
     r.tr.dataset.qnh=qnh; r.pt.value=Math.round(tField); r.tr.dataset.metar=best.icaoId+"|"+(best.icaoId!==a._id?dist:0)+"|"+hhmm;
     if(firstQnh==null) firstQnh=qnh; any=true;
