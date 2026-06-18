@@ -59,6 +59,7 @@ input[type=number]{-moz-appearance:textfield}
 .perf td.role{text-align:left;font-weight:600;white-space:nowrap;color:var(--primary)}
 .perf select,.perf input{padding:6px;font-size:13px}
 .perf .ap{min-width:150px}
+.perf select.pc{min-width:52px}
 .cell-ok{color:var(--ok);font-weight:700}
 .cell-bad{color:var(--bad);font-weight:700}
 .cell-warn{color:var(--warn);font-weight:700}
@@ -571,7 +572,7 @@ function buildADLists(){
 function adLookup(v){ if(!v) return null; const id=String(v).trim().split(/\s+/)[0].toUpperCase(); return AD[id]?Object.assign({_id:id},AD[id]):null; }
 function buildPerf(){
   buildADLists();
-  const PCOPTS='<option value="CH">Schweiz</option><option value="DE">Deutschland</option><option value="AT">Österreich</option><option value="FR">Frankreich</option><option value="IT">Italien</option><option value="BE">Belgien</option><option value="ALL">Alle</option>';
+  const PCOPTS='<option value="CH">CH</option><option value="DE">DE</option><option value="AT">AT</option><option value="FR">FR</option><option value="IT">IT</option><option value="BE">BE</option><option value="ALL">Alle</option>';
   const tb=$("perfBody"); tb.innerHTML=""; PERFROWS.length=0;
   ROLES.forEach((role,i)=>{
     const tr=document.createElement("tr");
@@ -601,36 +602,42 @@ function buildPerf(){
 /* ===================== RECALC ===================== */
 function parseTime(s){ if(!s) return 0; s=s.trim(); if(s.includes(":")){const[a,b]=s.split(":");return (+a)+(+b)/60;} return parseFloat(s)/60||0; }
 async function fetchJSON(url){
-  try{ const r=await fetch(url,{cache:"no-store"}); if(r.ok) return await r.json(); }catch(e){}
-  try{ const r=await fetch("https://api.allorigins.win/raw?url="+encodeURIComponent(url)); if(r.ok) return await r.json(); }catch(e){}
-  return null;
+  const tryFetch = async(u)=>{
+    const ctrl=new AbortController(); const t=setTimeout(()=>ctrl.abort(), 8000);
+    try{ const r=await fetch(u,{cache:"no-store",signal:ctrl.signal}); clearTimeout(t); if(r.ok) return await r.json(); }catch(e){ clearTimeout(t); }
+    return null;
+  };
+  let d=await tryFetch(url); if(d) return d;
+  return await tryFetch("https://api.allorigins.win/raw?url="+encodeURIComponent(url));
 }
 async function loadMetar(){
-  const st=$("metarStatus"); st.style.color="var(--mut)"; st.textContent="METAR wird geladen …";
-  $("metarBtn").disabled=true;
+  const st=$("metarStatus"); st.style.color="var(--mut)"; st.textContent="METAR wird geladen …"; $("metarBtn").disabled=true;
+  const jobs = PERFROWS.map((r,i)=>{
+    const a=adLookup(r.sel.value);
+    if(!a || !COORD[a._id]) return Promise.resolve(null);
+    const c=COORD[a._id], la=c[0], lo=c[1], dd=1.3;
+    const url="https://aviationweather.gov/api/data/metar?format=json&bbox="+(la-dd).toFixed(2)+","+(lo-dd).toFixed(2)+","+(la+dd).toFixed(2)+","+(lo+dd).toFixed(2);
+    return fetchJSON(url).then(arr=>({r:r,i:i,a:a,la:la,lo:lo,arr:arr})).catch(()=>({r:r,i:i,a:a,la:la,lo:lo,arr:null}));
+  });
+  const results = await Promise.all(jobs);
   let lines=[], firstQnh=null, any=false;
-  for(let i=0;i<PERFROWS.length;i++){
-    const r=PERFROWS[i]; const a=adLookup(r.sel.value);
-    if(!a || !COORD[a._id]) continue;
-    const c=COORD[a._id], la=c[0], lo=c[1], d=1.3;
-    const url="https://aviationweather.gov/api/data/metar?format=json&bbox="+(la-d).toFixed(2)+","+(lo-d).toFixed(2)+","+(la+d).toFixed(2)+","+(lo+d).toFixed(2);
-    const arr=await fetchJSON(url);
-    if(!arr || !arr.length){ lines.push(ROLES[i]+" ("+a._id+"): kein METAR in Reichweite"); continue; }
+  const now=new Date(); const hhmm=String(now.getHours()).padStart(2,"0")+":"+String(now.getMinutes()).padStart(2,"0");
+  for(const res of results){
+    if(!res) continue;
+    const r=res.r, i=res.i, a=res.a, la=res.la, lo=res.lo, arr=res.arr;
+    if(!arr || !arr.length){ lines.push(ROLES[i]+" ("+a._id+"): kein METAR erreichbar"); continue; }
     let best=null,bd=1e9;
-    for(const m of arr){ if(m.altim==null||m.temp==null||m.lat==null) continue; const dd=Math.pow(m.lat-la,2)+Math.pow(m.lon-lo,2); if(dd<bd){bd=dd;best=m;} }
+    for(const m of arr){ if(m.altim==null||m.temp==null||m.lat==null) continue; const dd2=Math.pow(m.lat-la,2)+Math.pow(m.lon-lo,2); if(dd2<bd){bd=dd2;best=m;} }
     if(!best){ lines.push(ROLES[i]+" ("+a._id+"): kein METAR"); continue; }
-    const qnh=Math.round(best.altim);
-    const stElev=(best.elev!=null)?best.elev:(a.e||0);
-    const tField=best.temp - 1.98*((a.e||0)-stElev)/1000;
-    const now=new Date(); const hhmm=String(now.getHours()).padStart(2,"0")+":"+String(now.getMinutes()).padStart(2,"0");
+    const qnh=Math.round(best.altim); const stElev=(best.elev!=null)?best.elev:(a.e||0);
+    const tField=best.temp - 1.98*((a.e||0)-stElev)/1000; const dist=Math.round(Math.sqrt(bd)*111);
     r.tr.dataset.qnh=qnh; r.pt.value=Math.round(tField); r.tr.dataset.metar=best.icaoId+"|"+(best.icaoId!==a._id?dist:0)+"|"+hhmm;
     if(firstQnh==null) firstQnh=qnh; any=true;
-    const dist=Math.round(Math.sqrt(bd)*111);
     lines.push(ROLES[i]+": <b>"+best.icaoId+"</b> "+qnh+" hPa, "+best.temp+"°C → "+Math.round(tField)+"°C @ "+a.e+" ft"+(best.icaoId!==a._id?" (~"+dist+" km)":""));
   }
   if(any){ $("tmode").value="man"; if(firstQnh!=null) $("qnh").value=firstQnh; }
   st.style.color = any? "var(--mut)":"var(--bad)";
-  st.innerHTML = lines.length? lines.join("<br>") : "Keine Flugplätze gewählt.";
+  st.innerHTML = lines.length? lines.join("<br>") : "METAR nicht erreichbar – QNH/Temp bitte manuell.";
   $("metarBtn").disabled=false;
   recalc();
 }
