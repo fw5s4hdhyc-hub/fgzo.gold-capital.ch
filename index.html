@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="FGZO M&amp;B">
 <meta name="theme-color" content="#032E75">
 <meta name="format-detection" content="telephone=no">
-<title>Mass &amp; Balance / Performance – C152 · C172 · Tecnam P2008</title>
+<title>Mass &amp; Balance / Performance – C152 · C172 · Tecnam P2008 · PA-18</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -108,7 +108,7 @@ details summary{cursor:pointer;color:var(--acc);font-size:13px;margin-top:8px;fo
   <img src="https://www.fgzo.ch/_images/FGZO-Logo.png" alt="FGZO" onerror="this.style.display='none'">
   <div class="ht">
     <h1>Mass &amp; Balance · Performance</h1>
-    <p>Flugsportgruppe Zürcher Oberland · Cessna 152 · Cessna 172 · Cessna 172 JT-A · Tecnam P2008 — Homebase LSZK Speck. Daten aus AFM &amp; Swiss AIP. <b>Ohne Gewähr — verbindlich ist das AFM.</b></p>
+    <p>Flugsportgruppe Zürcher Oberland · Cessna 152 · Cessna 172 · Cessna 172 JT-A · Tecnam P2008 · Piper PA-18 — Homebase LSZK Speck. Daten aus AFM &amp; Swiss AIP. <b>Ohne Gewähr — verbindlich ist das AFM.</b></p>
   </div>
 </div>
 </header>
@@ -194,7 +194,7 @@ Dieses Tool dient ausschliesslich der Unterstützung der Flugvorbereitung. Für 
 
 <div class="foot" style="text-align:center;padding-bottom:24px">
 Flugsportgruppe Zürcher Oberland FGZO · Flugplatz Speck-Fehraltorf LSZK<br>
-Erstellt aus AFM (C152, C172S, C172 JT-A Diesel, Tecnam P2008 S9) &amp; Swiss AIP. Berechnungen ohne Gewähr – im Zweifel gilt das AFM.
+Erstellt aus AFM (C152, C172S, C172 JT-A Diesel, Tecnam P2008 S9, Piper PA-18-150 HB-PPJ) &amp; Swiss AIP. Berechnungen ohne Gewähr – im Zweifel gilt das AFM.
 </div>
 </div>
 
@@ -314,12 +314,30 @@ const AC = {
    fuelArm:2.209,
    cg:{aft:1.978, fwdFn:function(){return 1.841;}},
    perf:"P2008"
+ },
+ PA18:{
+   name:"Piper PA-18-150 Super Cub", mtom:793.8, density:0.72, ff:33, fuelMax:132, fuelNote:"AVGAS od. MOGAS (STC) · 2×18 USG = 136 l total, ~132 l usable (prüfen). Dichte 0.72.", unusable:4,
+   // BEM/Moment HB-PPJ (Räder, ohne Skis) aus FGZO-Tabelle – bitte mit aktuellem Waegebericht pruefen!
+   regs:{ PPJ:{bem:555.6,mom:208.0} },
+   // Datum = Fluegelvorderkante (Wing L.E.); Arme = Zoll × 0.0254
+   stations:[
+     {k:"plt", l:"Pilot (vorne)",      arm:0.2794, def:85},
+     {k:"rear",l:"Passagier (hinten)", arm:0.9398, def:0},
+     {k:"bag", l:"Gepaeck",            arm:1.4478, def:0, max:22}
+   ],
+   fuelArm:0.6096,
+   // CG (m aft Wing L.E.): aft 20.0" const; fwd 10.5"@<=498.9kg -> 14.0"@793.8kg (Normal Cat.)
+   cg:{aft:0.508, fwdFn:function(w){
+        if(w<=498.9) return 0.2667;
+        if(w>=793.8) return 0.3556;
+        return 0.2667 + (0.3556-0.2667)*(w-498.9)/(793.8-498.9);}},
+   perf:"PA18"
  }
 };
 const FINALRES = {vfrday:30, vfrnight:45, ifr:30}; // min
 // Standard-Sicherheitsreserve [% Start, % Landung] gegenüber AFM-Bruttowert.
 // Cessna: AFM-Werte ohne eingebauten Faktor -> 0%. Tecnam: AFM empfiehlt ×1.10/×1.67 -> 10%/67%.
-const RES_DEF = {C152:[0,0], C172:[0,0], C172JTA:[0,0], P2008:[10,67]};
+const RES_DEF = {C152:[0,0], C172:[0,0], C172JTA:[0,0], P2008:[10,67], PA18:[0,0]};
 
 /* --- Performance Tabellen --- */
 /* Cessna: Werte in FUSS, [groundroll, total über 50ft]; Basis ASPHALT/eben/trocken */
@@ -424,6 +442,26 @@ const PERF = {
    ld:{ w:[650], alt:[0,1000,2000,3000,4000,5000,6000,7000,8000,9000,10000], temp:[-25,0,25,50], d:[[
      [[149,358],[164,373],[179,388],[194,403]],[[154,363],[170,379],[186,395],[201,410]],[[160,369],[176,385],[192,401],[209,418]],[[166,375],[183,392],[200,409],[216,425]],[[172,381],[190,399],[207,416],[225,434]],[[179,388],[197,406],[215,424],[233,442]],[[186,395],[205,414],[223,432],[242,451]],[[193,402],[212,421],[232,441],[251,460]],[[200,410],[221,430],[241,450],[261,470]],[[208,417],[229,438],[250,459],[271,480]],[[217,426],[238,447],[260,469],[282,491]]
    ]]}
+ },
+ /* PA-18: AFM HB-PPJ. Start metrisch @907kg (Hartbelag), Landung @1900lb (umgerechnet ft->m, °C-Raster).
+    Beide Tabellen jeweils EIN Referenzgewicht (AFM gibt keine Gewichtsstaffel) -> Strecke skaliert nicht mit
+    der Zuladung; Referenzgewichte liegen über MTOM, daher konservativ. Basis Hartbelag; Gras +15% Rollstrecke;
+    Wind: -1%/kt Gegenwind, +10% pro 2kt Rückenwind (AFM S.32). Hindernis 15 m = 50 ft. */
+ PA18:{ unit:"m", base:"A", basePaved:true, grassTO:0.15, grassLD:0.15, hwPct:10,
+   to:{ w:[907], alt:[0,2000,4000,6000,8000], temp:[0,10,20,30,40], d:[[
+     [[98,180],[106,191],[113,202],[120,211],[126,220]],
+     [[119,220],[129,237],[139,254],[148,270],[157,285]],
+     [[142,268],[156,292],[169,316],[181,339],[193,363]],
+     [[171,325],[188,358],[205,391],[221,423],[236,455]],
+     [[207,397],[229,440],[250,484],[270,527],[291,571]]
+   ]]},
+   ld:{ w:[862], alt:[0,2000,4000,6000,8000], temp:[0,10,20,30,40], d:[[
+     [[143,317],[146,325],[150,333],[153,341],[157,349]],
+     [[150,333],[154,342],[158,350],[161,358],[165,366]],
+     [[158,351],[162,359],[166,369],[170,378],[174,387]],
+     [[166,370],[171,379],[175,389],[179,398],[184,408]],
+     [[176,390],[180,401],[185,411],[190,421],[194,432]]
+   ]]}
  }
 };
 
@@ -475,13 +513,13 @@ function calcPerf(acKey, kind, weight, pressAlt, oat, surface, windKt){
   const tbl = kind==="to"?P.to:P.ld;
   let [gnd,tot]=perfLookup(tbl,weight,pressAlt,oat); // in P.unit
   let air = tot - gnd; // Luftstrecke (über/unter 50ft) – belag- und (näherungsweise) belastungsneutral
-  if(P.unit==="ft"){
+  if(P.unit==="ft" || P.basePaved){
     // Basis Asphalt; Gras-Zuschlag wirkt auf die Rollstrecke
     if(surface==="G"){ gnd *= (1 + (kind==="to"?P.grassTO:P.grassLD)); }
     // Wind proportional auf die ganze Strecke
     let w = windKt>=0 ? (1 - 0.10*(windKt/P.hwPct)) : (1 + 0.10*((-windKt)/2));
     gnd*=w; air*=w;
-    gnd*=FT; air*=FT;
+    if(P.unit==="ft"){ gnd*=FT; air*=FT; } // ft->m nur bei Cessna; PA-18 bereits in m
   } else {
     // Tecnam: Basis Gras; Asphalt -10% Rollstrecke
     if(surface==="A"){ gnd *= (1 + (kind==="to"?P.pavedTO:P.pavedLD)); }
